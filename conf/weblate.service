@@ -26,11 +26,9 @@ LimitNOFILE=65536
 Restart=on-failure
 KillSignal=SIGQUIT
 Type=notify
-StandardError=inherit
-NotifyAccess=all
-
 StandardOutput=append:/var/log/__APP__/__APP__.log
 StandardError=inherit
+NotifyAccess=all
 
 [Install]
 WantedBy=multi-user.target
