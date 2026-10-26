@@ -6,19 +6,39 @@ source /usr/share/yunohost/helpers
 ynh_print_info "Declaring files to be backed up..."
 
 #=================================================
-# BACKUP THE APP MAIN DIR
+# SNAPSHOT VENV PACKAGE LIST (small text file, ~10KB)
+#=================================================
+# Instead of backing up the entire ~1GB venv (which contains architecture-specific
+# binaries that can't be restored on a different arch anyway), we save a pip freeze
+# snapshot. On restore, the venv is recreated from this list — fast and portable.
+if [ -f "$install_dir/venv/bin/pip" ]; then
+    ynh_exec_as_app "$install_dir/venv/bin/pip" freeze > "$install_dir/venv_requirements.txt"
+fi
+
+#=================================================
+# BACKUP USER DATA AND CONFIG (NOT THE VENV)
 #=================================================
 
-ynh_backup "$install_dir"
+# User-uploaded files, caches, and DB-backed state
+ynh_backup "$install_dir/data"
+
+# Weblate configuration (these are small text files)
+ynh_backup "$install_dir/settings.py"
+ynh_backup "$install_dir/local_settings.py"
+ynh_backup "$install_dir/celery-weblate"
+ynh_backup "$install_dir/gunicorn.env"
+ynh_backup "$install_dir/venv_requirements.txt"
+
+# Hub config (only present if user chose GitHub during install)
+ynh_backup "$install_dir/.config" 2>/dev/null || true
+ynh_backup "$install_dir/.bashrc" 2>/dev/null || true
 
 #=================================================
 # SYSTEM CONFIGURATION
 #=================================================
 
 ynh_backup "/etc/nginx/conf.d/$domain.d/$app.conf"
-
 ynh_backup "/etc/logrotate.d/$app"
-
 ynh_backup "/etc/systemd/system/$app.service"
 ynh_backup "/etc/systemd/system/$app.socket"
 ynh_backup "/etc/systemd/system/$app-celery.service"
@@ -35,3 +55,4 @@ ynh_psql_dump_db > db.sql
 #=================================================
 
 ynh_print_info "Backup script completed for $app. (YunoHost will then actually copy those files to the archive)."
+ynh_print_info "Note: the Python venv is NOT backed up (saves ~1GB). It will be recreated on restore from venv_requirements.txt."
