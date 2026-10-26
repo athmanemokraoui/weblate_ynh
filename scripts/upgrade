@@ -19,7 +19,7 @@ path_no_slash=${path%/}
 #=================================================
 ynh_script_progression "Stopping systemd services..."
 
-ynh_systemctl --service=$app --action="stop" --log_path="/var/log/$app/weblate.log" # --wait_until="goodbye to uWSGI"
+ynh_systemctl --service="$app" --action="stop" --log_path="/var/log/$app/weblate.log" # --wait_until="goodbye to uWSGI"
 ynh_systemctl --service="$app.socket" --action="stop"
 ynh_systemctl --service="$app-celery" --action="stop" --log_path="systemd"
 
@@ -62,12 +62,12 @@ fi
 
 # If used_forge, forge_username, forge_token don't exist, create them
 if [ -z "$used_forge" ]; then
-	used_forge="GitHub"
-	forge_username=$(ynh_app_setting_get --key=github_account)
-	forge_token=$(ynh_app_setting_get --key=github_token)
-	ynh_app_setting_set --key=used_forge --value=$used_forge
-	ynh_app_setting_set --key=forge_username --value=$forge_username
-	ynh_app_setting_set --key=forge_token --value=$forge_token
+        used_forge="GitHub"
+        forge_username=$(ynh_app_setting_get --key=github_account)
+        forge_token=$(ynh_app_setting_get --key=github_token)
+        ynh_app_setting_set --key=used_forge --value="$used_forge"
+        ynh_app_setting_set --key=forge_username --value="$forge_username"
+        ynh_app_setting_set --key=forge_token --value="$forge_token"
 fi
 
 #=================================================
@@ -82,14 +82,14 @@ ynh_config_add_nginx
 # CONFIGURE HUB
 #=================================================
 
-if [ $used_forge = "GitHub" ] ; then
-	ynh_script_progression "Configure hub..."
+if [ "$used_forge" = "GitHub" ] ; then
+        ynh_script_progression "Configure hub..."
 
-	#mkdir "$install_dir/.config/"
-	ynh_config_add --template="hub_config" --destination="$install_dir/.config/hub"
+        #mkdir "$install_dir/.config/"
+        ynh_config_add --template="hub_config" --destination="$install_dir/.config/hub"
 
-	cat <<EOF > "$install_dir/.bashrc"
-	eval "$(hub alias -s /bin/bash)"
+        cat <<EOF > "$install_dir/.bashrc"
+        eval "$(hub alias -s /bin/bash)"
 EOF
 fi
 
@@ -119,30 +119,34 @@ ynh_config_add_systemd --service="$app-celery" --template="celery-weblate.servic
 #=================================================
 ynh_script_progression "Install weblate using PIP..."
 
+# Architecture-aware OpenSSL libdir — used as BORG_OPENSSL_PREFIX so that
+# borgbackup's source build can find libssl on any Debian arch (amd64/arm64/armhf/...).
+borg_openssl_prefix="$(get_openssl_libdir)"
+
 # Remove old venv
 ynh_safe_rm "${install_dir}/venv"
 
-pushd "$install_dir"
+pushd "$install_dir" || exit
     ynh_exec_as_app python3 -m venv "$install_dir/venv"
     ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip setuptools wheel pkgconfig gunicorn
 
-	# Workaround to https://github.com/WeblateOrg/weblate/issues/17573 until we can upgrade to 5.15 (Trixie)
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade django-otp==1.6.3
+        # Workaround to https://github.com/WeblateOrg/weblate/issues/17573 until we can upgrade to 5.15 (Trixie)
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade django-otp==1.6.3
 
-	# Temporary fix to prevent ERROR: Dependency 'girepository-2.0' is required but not found.
-	# As of 09 jan 2026 it’s not yet fixed 
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip PyGObject==3.50.0
-	
-	# Read the "Note" section in https://docs.weblate.org/en/weblate-4.11/admin/install/venv-debian.html#python-modules
+        # Temporary fix to prevent ERROR: Dependency 'girepository-2.0' is required but not found.
+        # As of 09 jan 2026 it's not yet fixed
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip PyGObject==3.50.0
+
+        # Read the "Note" section in https://docs.weblate.org/en/weblate-4.11/admin/install/venv-debian.html#python-modules
     ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --force-reinstall --no-binary :all: cffi
 
-	ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX=/usr/lib/x86_64-linux-gnu/ "$install_dir/venv/bin/pip" install Weblate=="$(ynh_app_upstream_version)"
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install psycopg2-binary ruamel.yaml aeidon phply boto3 google openai
+        ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX="$borg_openssl_prefix/" "$install_dir/venv/bin/pip" install Weblate=="$(ynh_app_upstream_version)"
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install psycopg2-binary ruamel.yaml aeidon phply boto3 google openai
 
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install django_sendmail_backend
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install django_sendmail_backend
 
     ynh_safe_rm "$install_dir/.cache/pip"
-popd
+popd || exit
 
 #=================================================
 # MODIFY A CONFIG FILE
@@ -168,52 +172,46 @@ touch "$install_dir/local_settings.py"
 ln -sf "$install_dir/local_settings.py" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/local_settings.py"
 
 #=================================================
+# ENSURE PG_TRGM EXTENSION EXISTS (BEFORE MIGRATIONS)
+#=================================================
+# pg_trgm must be created BEFORE migrations — Weblate uses trigram indexes.
+# On a restored DB that didn't capture extensions, migrations would fail.
+ynh_psql_db_shell <<< "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
+#=================================================
 # MIGRATE WEBLATE
 #=================================================
 ynh_script_progression "Run migration scripts..."
 
-ynh_systemctl --service="$app-celery" --action="start"
+# NOTE: celery is intentionally NOT started here. Earlier versions started
+# celery before running `weblate migrate`, which left celery workers running
+# new code against the old DB schema during the migration window.
+# Celery is now started AFTER migrations + static asset rebuild below,
+# when the schema is consistent with the installed code.
 
-pushd $install_dir
-	# exec_as_app because it needs to be $app for postgresql
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate migrate --noinput
+pushd "$install_dir" || exit
+        # exec_as_app because it needs to be $app for postgresql
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" migrate --noinput
 
-	# generate static files
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate collectstatic --noinput
+        # generate static files
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" collectstatic --noinput
 
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate setuplang
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate setupgroups
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate compilemessages
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" setuplang
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" setupgroups
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" compilemessages
 
-	# https://docs.weblate.org/en/latest/admin/install/venv-debian.html
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate compress
+        # https://docs.weblate.org/en/latest/admin/install/venv-debian.html
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" compress
 
-	# Check the configuration
-	# This may fail in some cases with errors, etc., but the app works and the user can fix issues later.
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate check --deploy || true
+        # Check the configuration
+        # This may fail in some cases with errors, etc., but the app works and the user can fix issues later.
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" check --deploy || true
 
-popd
-
-ynh_systemctl --service="$app-celery" --action="stop"
-
-file_version="${install_dir}/venv/lib/$weblate_pypath/site-packages/weblate/__init__.py"
-if [ -e $file_version ]
-then
-	current_version=$(cat $file_version | grep "^VERSION = " | grep -o "[0-9].[0-9]" | head -n1 | cut -d"." -f1)
-	if [ -z "$current_version" ]
-	then
-		file_version="${install_dir}/venv/lib/$weblate_pypath/site-packages/weblate/utils/version.py"
-		current_version=$(cat $file_version | grep "^VERSION = " | grep -o "[0-9].[0-9]" | head -n1 | cut -d"." -f1)
-	fi
-else
-	current_version=3
-fi
-
-ynh_psql_db_shell <<< "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+popd || exit
 
 # Set right permissions for curl installation
 mkdir -p "$install_dir/avatar-cache"
-chown -R $app: "$install_dir"
+chown -R "$app:" "$install_dir"
 chown "$app:www-data" "$install_dir"
 chown -R "$app:www-data" "$install_dir/data"
 
@@ -232,7 +230,7 @@ ynh_config_add_logrotate
 #=================================================
 ynh_script_progression "Integrating service in YunoHost..."
 
-yunohost service add $app --log="/var/log/$app/weblate.log"
+yunohost service add "$app" --log="/var/log/$app/weblate.log"
 yunohost service add "$app-celery" --log="/var/log/$app/weblate-celery-w1.log"
 
 #=================================================
@@ -240,8 +238,8 @@ yunohost service add "$app-celery" --log="/var/log/$app/weblate-celery-w1.log"
 #=================================================
 ynh_script_progression "Starting systemd services..."
 
-ynh_systemctl --service=$app.socket --action="restart"
-ynh_systemctl --service=$app --action="start" --log_path="/var/log/$app/weblate.log" # --wait_until="spawned uWSGI"
+ynh_systemctl --service="$app.socket" --action="restart"
+ynh_systemctl --service="$app" --action="start" --log_path="/var/log/$app/weblate.log" # --wait_until="spawned uWSGI"
 ynh_systemctl --service="$app-celery" --action="start" --log_path="/var/log/$app/weblate-celery.log"
 
 #=================================================
