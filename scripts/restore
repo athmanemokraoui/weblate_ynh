@@ -4,20 +4,66 @@ source ../settings/scripts/_common.sh
 source /usr/share/yunohost/helpers
 
 #=================================================
-# RESTORE THE APP MAIN DIR
+# RESTORE THE APP MAIN DIR (excluding venv)
 #=================================================
 ynh_script_progression "Restoring the app main directory..."
 
-ynh_restore "$install_dir"
-
-touch "$install_dir/local_settings.py"
-ln -sf "$install_dir/local_settings.py" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/local_settings.py"
+# Restore user data, settings, and config files — NOT the venv itself.
+# The venv is recreated below from the saved pip freeze (or fresh install if missing).
+# This saves ~1GB on every backup archive.
+ynh_restore "$install_dir/data"
+ynh_restore "$install_dir/settings.py"
+ynh_restore "$install_dir/local_settings.py"
+ynh_restore "$install_dir/celery-weblate"
+ynh_restore "$install_dir/gunicorn.env" 2>/dev/null || true
+ynh_restore "$install_dir/venv_requirements.txt" 2>/dev/null || true
+# Restore hub config if it was backed up
+if [ -f "$install_dir/.config/hub" ]; then
+    :
+fi
+ynh_restore "$install_dir/.config" 2>/dev/null || true
+ynh_restore "$install_dir/.bashrc" 2>/dev/null || true
 
 chmod 750 "$install_dir"
 chmod -R o-rwx "$install_dir"
 chown -R "$app:" "$install_dir"
 chown "$app:www-data" "$install_dir"
 chown -R "$app:www-data" "$install_dir/data"
+
+#=================================================
+# RECREATE THE VENV
+#=================================================
+ynh_script_progression "Recreating the Python virtual environment..."
+
+borg_openssl_prefix="$(get_openssl_libdir)"
+
+ynh_exec_as_app python3 -m venv "$install_dir/venv"
+ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade pip setuptools wheel pkgconfig gunicorn
+
+if [ -f "$install_dir/venv_requirements.txt" ]; then
+    # Fast path: restore from saved pip freeze (~30 seconds)
+    ynh_print_info "Recreating venv from saved package list..."
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir -r "$install_dir/venv_requirements.txt"
+else
+    # Slow path: fresh install (no saved requirements — e.g. backup from older version)
+    ynh_print_info "Saved package list not found — performing full pip install..."
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade django-otp==1.6.3
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade pip PyGObject==3.50.0
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --force-reinstall --no-binary :all: cffi
+    ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX="$borg_openssl_prefix/" "$install_dir/venv/bin/pip" install --no-cache-dir Weblate=="$(ynh_app_upstream_version)"
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir psycopg2-binary ruamel.yaml aeidon phply boto3 google openai
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir django_sendmail_backend
+fi
+
+# Link settings.py into the venv so Weblate can find it
+ln -sf "$install_dir/settings.py" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/settings.py"
+touch "$install_dir/local_settings.py"
+ln -sf "$install_dir/local_settings.py" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/local_settings.py"
+
+# Regenerate gunicorn env if missing (in case CPU count changed since backup)
+if [ ! -f "$install_dir/gunicorn.env" ]; then
+    generate_gunicorn_env
+fi
 
 #=================================================
 # RESTORE THE NGINX CONFIGURATION
