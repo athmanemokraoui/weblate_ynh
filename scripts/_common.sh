@@ -22,18 +22,46 @@ else
     ynh_die "Unsupported Debian version: $debian_maj_version (only Debian 9-14 are supported)"
 fi
 
+# Set the forge-related variables (github_username, github_token, gitlab_username, gitlab_token)
+# based on the user's choice of forge.
+#
+# Handles case-insensitive matching: "github", "GitHub", "GITHUB" all work.
+# This fixes a long-standing bug where the original `if [ "$used_forge" = "GitHub" ]`
+# never matched because the manifest stores the lowercase key "github".
 set_forge_variables() {
-        if [ "$used_forge" = "GitHub" ] ; then
-                github_username="$forge_username"
-                github_token="$forge_token"
-                gitlab_username="None"
-                gitlab_token="None"
-        else
-                github_username="None"
-                github_token="None"
-                gitlab_username="$forge_username"
-                gitlab_token="$forge_token"
-        fi
+    case "$used_forge" in
+        github|GitHub|GITHUB)
+            github_username="$forge_username"
+            github_token="$forge_token"
+            gitlab_username="None"
+            gitlab_token="None"
+            ;;
+        gitlab|GitLab|GITLAB)
+            github_username="None"
+            github_token="None"
+            gitlab_username="$forge_username"
+            gitlab_token="$forge_token"
+            ;;
+        "")
+            # No forge configured — that's OK, user can configure later via web UI
+            github_username="None"
+            github_token="None"
+            gitlab_username="None"
+            gitlab_token="None"
+            ;;
+        *)
+            ynh_die "Unknown forge: '$used_forge' (expected: github or gitlab)"
+            ;;
+    esac
+}
+
+# Returns 0 (true) if the user selected GitHub as their forge, 1 (false) otherwise.
+# Case-insensitive — matches "github", "GitHub", "GITHUB".
+is_github_forge() {
+    case "$used_forge" in
+        github|GitHub|GITHUB) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Get the OpenSSL library directory for the current Debian architecture.
@@ -62,6 +90,24 @@ get_openssl_libdir() {
     esac
 }
 
+# Generate the gunicorn environment file with auto-tuned worker/thread counts.
+# Default: 1 worker per CPU core (min 2), 4 threads per worker.
+# Users can override by editing $install_dir/gunicorn.env after install.
+generate_gunicorn_env() {
+    local cpu_count workers threads
+    cpu_count="$(nproc 2>/dev/null || echo 2)"
+    [ "$cpu_count" -lt 2 ] && cpu_count=2
+    workers="$cpu_count"
+    threads=$((cpu_count * 4))
+
+    cat > "$install_dir/gunicorn.env" <<EOF
+GUNICORN_WORKERS=$workers
+GUNICORN_THREADS=$threads
+EOF
+    chown "$app:$app" "$install_dir/gunicorn.env"
+    chmod 600 "$install_dir/gunicorn.env"
+    ynh_print_info "Gunicorn auto-tuned: $workers workers × $threads threads"
+}
 
 # Create a dedicated systemd socket config
 #
