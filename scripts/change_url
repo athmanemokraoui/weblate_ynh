@@ -8,7 +8,7 @@ source /usr/share/yunohost/helpers
 #=================================================
 ynh_script_progression "Stopping systemd services..."
 
-ynh_systemctl --service=$app --action="stop" --log_path="/var/log/$app/weblate.log" #--wait_until="goodbye to uWSGI"
+ynh_systemctl --service="$app" --action="stop" --log_path="/var/log/$app/weblate.log" #--wait_until="goodbye to uWSGI"
 ynh_systemctl --service="$app-celery" --action="stop" --log_path="systemd"
 
 #=================================================
@@ -26,21 +26,30 @@ ynh_script_progression "Modify weblate's config file..."
 settings="$install_dir/settings.py"
 ynh_backup_if_checksum_is_different "$settings"
 
+# Escape a string for use as a literal in sed regex.
+# Used because $old_path / $new_path / $old_domain / $new_domain may contain
+# characters that are regex metacharacters (e.g. "." in "example.com").
+regex_escape() {
+    # Backslash-escape regex metacharacters in the input
+    printf '%s' "$1" | sed -e 's/[.[\*^$()+?{|\\]/\\&/g'
+}
+
 # Change the path in the nginx config file
-if [ $change_path -eq 1 ]
+if [ "$change_path" -eq 1 ]
 then
-	ynh_replace --match="URL_PREFIX = \"${old_path%/}\"" --replace="URL_PREFIX = \"${new_path%/}\"" --file="$settings"
+    old_path_esc="$(regex_escape "${old_path%/}")"
+    new_path_lit="${new_path%/}"
+    ynh_replace --match="URL_PREFIX = \"${old_path_esc}\"" --replace="URL_PREFIX = \"${new_path_lit}\"" --file="$settings"
 fi
 
 # Change the domain for nginx
-if [ $change_domain -eq 1 ]
+if [ "$change_domain" -eq 1 ]
 then
-	# replace SERVER_EMAIL
-	ynh_replace --match="noreply@$old_domain" --replace="noreply@$new_domain" --file="$settings"
-	# replace SITE_DOMAIN
-	ynh_replace --match="SITE_DOMAIN = \"$old_domain\"" --replace="SITE_DOMAIN = \"$new_domain\"" --file="$settings"
-	# replace ALLOWED_HOSTS
-	ynh_replace --match="ALLOWED_HOSTS = \[\"$old_domain\"\]" --replace="ALLOWED_HOSTS = \[\"$new_domain\"\]" --file="$settings"
+    old_domain_esc="$(regex_escape "$old_domain")"
+    new_domain_lit="$new_domain"
+    ynh_replace --match="noreply@${old_domain_esc}" --replace="noreply@${new_domain_lit}" --file="$settings"
+    ynh_replace --match="SITE_DOMAIN = \"${old_domain_esc}\"" --replace="SITE_DOMAIN = \"${new_domain_lit}\"" --file="$settings"
+    ynh_replace --match="ALLOWED_HOSTS = \[\"${old_domain_esc}\"\]" --replace="ALLOWED_HOSTS = \[\"${new_domain_lit}\"\]" --file="$settings"
 fi
 
 ynh_store_file_checksum "$settings"
@@ -50,7 +59,8 @@ ynh_store_file_checksum "$settings"
 #=================================================
 ynh_script_progression "Starting $app's systemd service..."
 
-ynh_systemctl --service=$app --action="start" --log_path="/var/log/$app/weblate.log" #--wait_until="spawned uWSGI"
+ynh_systemctl --service="$app.socket" --action="restart"
+ynh_systemctl --service="$app" --action="start" --log_path="/var/log/$app/weblate.log" #--wait_until="spawned uWSGI"
 ynh_systemctl --service="$app-celery" --action="start" --log_path="/var/log/$app/weblate-celery.log"
 
 #=================================================
