@@ -84,8 +84,9 @@ ram.runtime = "3G"
     [resources.permissions]
     main.url = "/"
 
-    [resources.ports]
-    main.default = 8080
+    # Port 8080 was previously reserved but is unused: gunicorn binds to a UNIX
+    # socket (/run/$app.sock), so reserving a TCP port would just block it for
+    # other apps on this YunoHost instance (relevant for multi_instance=true).
 
     [resources.apt]
         packages = [
@@ -105,9 +106,10 @@ ram.runtime = "3G"
         "postgresql-contrib",
         "hub",
         "gettext",
-        # Borg backup dependencies
+        # Borg backup dependencies (note: libacl1-dev and libssl-dev already listed above
+        # are intentionally not duplicated here)
         "pkg-config", "python3-pkgconfig",
-        "libacl1-dev", "libacl1", "libssl-dev", "liblz4-dev", "libzstd-dev", "libxxhash-dev",
+        "libacl1", "liblz4-dev", "libzstd-dev", "libxxhash-dev",
     ]
 
     [resources.database]
