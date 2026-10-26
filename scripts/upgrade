@@ -127,23 +127,25 @@ borg_openssl_prefix="$(get_openssl_libdir)"
 ynh_safe_rm "${install_dir}/venv"
 
 pushd "$install_dir" || exit
+    # --no-cache-dir: avoids keeping downloaded wheels on disk (saves ~500MB peak usage
+    # during upgrade — important on small root partitions).
     ynh_exec_as_app python3 -m venv "$install_dir/venv"
-    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip setuptools wheel pkgconfig gunicorn
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade pip setuptools wheel pkgconfig gunicorn
 
         # Workaround to https://github.com/WeblateOrg/weblate/issues/17573 until we can upgrade to 5.15 (Trixie)
-        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade django-otp==1.6.3
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade django-otp==1.6.3
 
         # Temporary fix to prevent ERROR: Dependency 'girepository-2.0' is required but not found.
         # As of 09 jan 2026 it's not yet fixed
-        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip PyGObject==3.50.0
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade pip PyGObject==3.50.0
 
         # Read the "Note" section in https://docs.weblate.org/en/weblate-4.11/admin/install/venv-debian.html#python-modules
-    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --force-reinstall --no-binary :all: cffi
+    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --force-reinstall --no-binary :all: cffi
 
-        ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX="$borg_openssl_prefix/" "$install_dir/venv/bin/pip" install Weblate=="$(ynh_app_upstream_version)"
-        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install psycopg2-binary ruamel.yaml aeidon phply boto3 google openai
+        ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX="$borg_openssl_prefix/" "$install_dir/venv/bin/pip" install --no-cache-dir Weblate=="$(ynh_app_upstream_version)"
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir psycopg2-binary ruamel.yaml aeidon phply boto3 google openai
 
-        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install django_sendmail_backend
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir django_sendmail_backend
 
     ynh_safe_rm "$install_dir/.cache/pip"
 popd || exit
