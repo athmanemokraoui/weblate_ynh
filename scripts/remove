@@ -8,14 +8,17 @@ source /usr/share/yunohost/helpers
 #=================================================
 ynh_script_progression "Removing system configurations related to $app..."
 
+# NOTE: ynh_config_remove_systemd_socket targets "$app.socket" (not "$app.service")
+# — fixed in _common.sh. Without the fix, calling this would disable weblate.service
+# while leaving weblate.socket enabled in systemd, causing errors on next boot.
 ynh_config_remove_systemd_socket
 
-if ynh_hide_warnings yunohost service status $app >/dev/null; then
-	yunohost service remove $app
+if ynh_hide_warnings yunohost service status "$app" >/dev/null; then
+        yunohost service remove "$app"
 fi
 
 if ynh_hide_warnings yunohost service status "$app-celery" >/dev/null; then
-	yunohost service remove "$app-celery"
+        yunohost service remove "$app-celery"
 fi
 
 ynh_config_remove_systemd
