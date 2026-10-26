@@ -1,70 +1,32 @@
-#!/bin/bash
 
-source _common.sh
-source /usr/share/yunohost/helpers
+---
 
-#=================================================
-# STOP SYSTEMD SERVICE
-#=================================================
-ynh_script_progression "Stopping systemd services..."
+## Summary of Changes from Previous Version
 
-ynh_systemctl --service="$app" --action="stop" --log_path="/var/log/$app/weblate.log" #--wait_until="goodbye to uWSGI"
-ynh_systemctl --service="$app-celery" --action="stop" --log_path="systemd"
+| File | What changed |
+|---|---|
+| `manifest.toml` | No changes (already clean from previous version) |
+| `scripts/_common.sh` | **Case-insensitive forge matching** via `case` statement; added `is_github_forge()` helper; added `generate_gunicorn_env()` helper |
+| `scripts/install` | Uses `is_github_forge` (case-insensitive); saves `pip freeze` to `venv_requirements.txt`; calls `generate_gunicorn_env`; prints post-install info |
+| `scripts/upgrade` | Same fixes as install; default forge is `"github"` (lowercase, matching manifest) when migrating from old settings |
+| `scripts/remove` | No changes (was already correct) |
+| `scripts/restore` | **Recreates venv from `venv_requirements.txt`** instead of restoring ~1GB of binaries; falls back to fresh install if requirements file is missing |
+| `scripts/backup` | **Does NOT back up venv** (saves ~1GB per backup); saves `pip freeze` snapshot instead; backs up `gunicorn.env` and `venv_requirements.txt` |
+| `scripts/change_url` | No changes (was already correct) |
+| `conf/weblate.service` | **Uses `EnvironmentFile`** for `gunicorn.env` (auto-tuned workers); **`Restart=always`** with rate limiting (5 restarts in 60s max) |
+| `conf/celery-weblate.service` | **`Restart=on-failure`** with rate limiting (5 restarts in 120s max) |
+| `doc/POST_INSTALL.md` | **NEW** — comprehensive post-install guide for users |
 
-#=================================================
-# MODIFY URL IN NGINX CONF
-#=================================================
-ynh_script_progression "Updating NGINX web server configuration..."
+## How to Apply These Changes
 
-ynh_config_change_url_nginx
+1. Update the 9 files in your fork (8 modified + 1 new `doc/POST_INSTALL.md`)
+2. Commit & push to GitHub
+3. Uninstall current Weblate: `sudo yunohost app remove weblate`
+4. Reinstall from fork: `sudo yunohost app install https://github.com/<your-username>/weblate_ynh/tree/master`
+5. Verify:
+   - `cat /var/www/weblate/gunicorn.env` — should show your CPU count × 4 threads
+   - `cat /var/www/weblate/venv_requirements.txt` — should list all installed packages
+   - `systemctl cat weblate` — should show `Restart=always` and `EnvironmentFile=`
+   - Visit the app URL and log in
 
-#=================================================
-# MODIFY SETTINGS
-#=================================================
-ynh_script_progression "Modify weblate's config file..."
-
-settings="$install_dir/settings.py"
-ynh_backup_if_checksum_is_different "$settings"
-
-# Escape a string for use as a literal in sed regex.
-# Used because $old_path / $new_path / $old_domain / $new_domain may contain
-# characters that are regex metacharacters (e.g. "." in "example.com").
-regex_escape() {
-    # Backslash-escape regex metacharacters in the input
-    printf '%s' "$1" | sed -e 's/[.[\*^$()+?{|\\]/\\&/g'
-}
-
-# Change the path in the nginx config file
-if [ "$change_path" -eq 1 ]
-then
-    old_path_esc="$(regex_escape "${old_path%/}")"
-    new_path_lit="${new_path%/}"
-    ynh_replace --match="URL_PREFIX = \"${old_path_esc}\"" --replace="URL_PREFIX = \"${new_path_lit}\"" --file="$settings"
-fi
-
-# Change the domain for nginx
-if [ "$change_domain" -eq 1 ]
-then
-    old_domain_esc="$(regex_escape "$old_domain")"
-    new_domain_lit="$new_domain"
-    ynh_replace --match="noreply@${old_domain_esc}" --replace="noreply@${new_domain_lit}" --file="$settings"
-    ynh_replace --match="SITE_DOMAIN = \"${old_domain_esc}\"" --replace="SITE_DOMAIN = \"${new_domain_lit}\"" --file="$settings"
-    ynh_replace --match="ALLOWED_HOSTS = \[\"${old_domain_esc}\"\]" --replace="ALLOWED_HOSTS = \[\"${new_domain_lit}\"\]" --file="$settings"
-fi
-
-ynh_store_file_checksum "$settings"
-
-#=================================================
-# START SYSTEMD SERVICE
-#=================================================
-ynh_script_progression "Starting $app's systemd service..."
-
-ynh_systemctl --service="$app.socket" --action="restart"
-ynh_systemctl --service="$app" --action="start" --log_path="/var/log/$app/weblate.log" #--wait_until="spawned uWSGI"
-ynh_systemctl --service="$app-celery" --action="start" --log_path="/var/log/$app/weblate-celery.log"
-
-#=================================================
-# END OF SCRIPT
-#=================================================
-
-ynh_script_progression "Change of URL completed for $app"
+The install log this time should show `[github = GitHub]` matching successfully via `is_github_forge`, and the `hub_config` template should be properly rendered. Backup sizes should drop from ~1.2GB to ~200MB.
