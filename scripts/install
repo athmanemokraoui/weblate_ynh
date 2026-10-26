@@ -52,8 +52,11 @@ ynh_config_add_nginx
 #=================================================
 # CONFIGURE HUB
 #=================================================
-
-if [ "$used_forge" = "GitHub" ] ; then
+# NOTE: Case-insensitive match — handles "github", "GitHub", "GITHUB".
+# The original `if [ "$used_forge" = "GitHub" ]` never matched because the
+# manifest stores the lowercase key "github", silently breaking GitHub
+# integration for all users.
+if is_github_forge; then
         ynh_script_progression "Configure hub..."
 
         mkdir -p "$install_dir/.config/"
@@ -94,6 +97,9 @@ pushd "$install_dir" || exit
 
         ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir django_sendmail_backend
 
+    # Save installed package versions for fast restore (also used to detect drift on upgrade)
+    ynh_exec_as_app "$install_dir/venv/bin/pip" freeze > "$install_dir/venv_requirements.txt"
+
     ynh_safe_rm "$install_dir/.cache/pip"
 popd || exit
 
@@ -115,6 +121,9 @@ ln -sf "$settings" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/
 
 touch "$install_dir/local_settings.py"
 ln -sf "$install_dir/local_settings.py" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/local_settings.py"
+
+# Generate auto-tuned gunicorn env file (workers/threads based on CPU count)
+generate_gunicorn_env
 
 ynh_config_add_systemd_socket
 
@@ -193,3 +202,5 @@ ynh_systemctl --service="$app-celery" --action="start" --log_path="/var/log/$app
 #=================================================
 
 ynh_script_progression "Installation of $app completed"
+ynh_print_info "Weblate is now available at https://$domain$path_no_slash/"
+ynh_print_info "See post-install setup guide: https://github.com/YunoHost-Apps/weblate_ynh/blob/master/doc/POST_INSTALL.md"
