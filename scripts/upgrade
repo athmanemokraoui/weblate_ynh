@@ -62,7 +62,7 @@ fi
 
 # If used_forge, forge_username, forge_token don't exist, create them
 if [ -z "$used_forge" ]; then
-        used_forge="GitHub"
+        used_forge="github"
         forge_username=$(ynh_app_setting_get --key=github_account)
         forge_token=$(ynh_app_setting_get --key=github_token)
         ynh_app_setting_set --key=used_forge --value="$used_forge"
@@ -81,8 +81,10 @@ ynh_config_add_nginx
 #=================================================
 # CONFIGURE HUB
 #=================================================
-
-if [ "$used_forge" = "GitHub" ] ; then
+# NOTE: Case-insensitive match — handles "github", "GitHub", "GITHUB".
+# Fixes the long-standing bug where GitHub integration silently failed because
+# the manifest stores the lowercase key "github".
+if is_github_forge; then
         ynh_script_progression "Configure hub..."
 
         #mkdir "$install_dir/.config/"
@@ -147,6 +149,9 @@ pushd "$install_dir" || exit
 
         ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir django_sendmail_backend
 
+    # Refresh the saved package list — used by restore for fast venv recreation
+    ynh_exec_as_app "$install_dir/venv/bin/pip" freeze > "$install_dir/venv_requirements.txt"
+
     ynh_safe_rm "$install_dir/.cache/pip"
 popd || exit
 
@@ -172,6 +177,9 @@ ln -sf "$settings" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/
 
 touch "$install_dir/local_settings.py"
 ln -sf "$install_dir/local_settings.py" "$install_dir/venv/lib/$weblate_pypath/site-packages/weblate/local_settings.py"
+
+# Refresh the auto-tuned gunicorn env file (in case CPU count changed, e.g. VM resize)
+generate_gunicorn_env
 
 #=================================================
 # ENSURE PG_TRGM EXTENSION EXISTS (BEFORE MIGRATIONS)
