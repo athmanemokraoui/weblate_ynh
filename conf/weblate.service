@@ -9,6 +9,10 @@ Group=__APP__
 PermissionsStartOnly=true
 WorkingDirectory=__INSTALL_DIR__/
 
+# Load auto-tuned worker/thread counts from env file (generated at install time
+# by generate_gunicorn_env in _common.sh). Users can edit this file to override.
+EnvironmentFile=__INSTALL_DIR__/gunicorn.env
+
 Environment="DJANGO_SETTINGS_MODULE=settings"
 
 ExecStart=__INSTALL_DIR__/venv/bin/gunicorn \
@@ -16,14 +20,20 @@ ExecStart=__INSTALL_DIR__/venv/bin/gunicorn \
     --timeout 3600 \
     --graceful-timeout 3600 \
     --worker-class=gthread \
-    --workers=2 \
-    --threads=16 \
+    --workers=${GUNICORN_WORKERS} \
+    --threads=${GUNICORN_THREADS} \
     --bind unix:/run/__APP__.sock \
     weblate.wsgi:application
 
 LimitNOFILE=65536
 
-Restart=on-failure
+# Restart hardening: auto-restart on any failure, with rate limiting to prevent
+# crash loops from pegging CPU. Burst of 5 restarts within 60s stops the loop.
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 KillSignal=SIGQUIT
 Type=notify
 StandardOutput=append:/var/log/__APP__/__APP__.log
