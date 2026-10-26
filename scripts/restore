@@ -17,10 +17,6 @@ ynh_restore "$install_dir/local_settings.py"
 ynh_restore "$install_dir/celery-weblate"
 ynh_restore "$install_dir/gunicorn.env" 2>/dev/null || true
 ynh_restore "$install_dir/venv_requirements.txt" 2>/dev/null || true
-# Restore hub config if it was backed up
-if [ -f "$install_dir/.config/hub" ]; then
-    :
-fi
 ynh_restore "$install_dir/.config" 2>/dev/null || true
 ynh_restore "$install_dir/.bashrc" 2>/dev/null || true
 
@@ -47,7 +43,6 @@ if [ -f "$install_dir/venv_requirements.txt" ]; then
 else
     # Slow path: fresh install (no saved requirements — e.g. backup from older version)
     ynh_print_info "Saved package list not found — performing full pip install..."
-    ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade django-otp==1.6.3
     ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --upgrade pip PyGObject==3.50.0
     ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --no-cache-dir --force-reinstall --no-binary :all: cffi
     ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX="$borg_openssl_prefix/" "$install_dir/venv/bin/pip" install --no-cache-dir Weblate=="$(ynh_app_upstream_version)"
