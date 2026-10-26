@@ -15,9 +15,9 @@ key=$(ynh_string_random --length=50)
 #=================================================
 ynh_script_progression "Storing installation settings..."
 
-ynh_app_setting_set --key=used_forge --value=$used_forge
-ynh_app_setting_set --key=forge_username --value=$forge_username
-ynh_app_setting_set --key=forge_token --value=$forge_token
+ynh_app_setting_set --key=used_forge --value="$used_forge"
+ynh_app_setting_set --key=forge_username --value="$forge_username"
+ynh_app_setting_set --key=forge_token --value="$forge_token"
 
 # Remove trailing "/" from the path
 path_no_slash=${path%/}
@@ -27,6 +27,7 @@ path_no_slash=${path%/}
 #=================================================
 ynh_script_progression "Creating a PostgreSQL database..."
 
+# pg_trgm must be created BEFORE migrations — Weblate uses trigram indexes.
 ynh_psql_db_shell <<< "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
 
 #=================================================
@@ -39,7 +40,7 @@ mkdir -p "$install_dir/data"
 
 chmod 750 "$install_dir"
 chmod -R o-rwx "$install_dir"
-chown -R $app:www-data "$install_dir"
+chown -R "$app:www-data" "$install_dir"
 
 #=================================================
 # NGINX CONFIGURATION
@@ -52,14 +53,14 @@ ynh_config_add_nginx
 # CONFIGURE HUB
 #=================================================
 
-if [ $used_forge = "GitHub" ] ; then
-	ynh_script_progression "Configure hub..."
+if [ "$used_forge" = "GitHub" ] ; then
+        ynh_script_progression "Configure hub..."
 
-	mkdir "$install_dir/.config/"
-	ynh_config_add --template="hub_config" --destination="$install_dir/.config/hub"
+        mkdir -p "$install_dir/.config/"
+        ynh_config_add --template="hub_config" --destination="$install_dir/.config/hub"
 
-	cat <<EOF > "$install_dir/.bashrc"
-	eval "$(hub alias -s /bin/bash)"
+        cat <<EOF > "$install_dir/.bashrc"
+        eval "$(hub alias -s /bin/bash)"
 EOF
 fi
 
@@ -68,27 +69,31 @@ fi
 #=================================================
 ynh_script_progression "Install weblate using PIP..."
 
-pushd "$install_dir"
+# Architecture-aware OpenSSL libdir — used as BORG_OPENSSL_PREFIX so that
+# borgbackup's source build can find libssl on any Debian arch (amd64/arm64/armhf/...).
+borg_openssl_prefix="$(get_openssl_libdir)"
+
+pushd "$install_dir" || exit
     ynh_exec_as_app python3 -m venv "$install_dir/venv"
     ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip setuptools wheel pkgconfig gunicorn
 
-	# Workaround to https://github.com/WeblateOrg/weblate/issues/17573 until we can upgrade to 5.15 (Trixie)
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade django-otp==1.6.3
+        # Workaround to https://github.com/WeblateOrg/weblate/issues/17573 until we can upgrade to 5.15 (Trixie)
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade django-otp==1.6.3
 
-	# Temporary fix to prevent ERROR: Dependency 'girepository-2.0' is required but not found.
-	# As of 09 jan 2026 it’s not yet fixed 
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip PyGObject==3.50.0
-	
-	# Read the "Note" section in https://docs.weblate.org/en/weblate-4.11/admin/install/venv-debian.html#python-modules
+        # Temporary fix to prevent ERROR: Dependency 'girepository-2.0' is required but not found.
+        # As of 09 jan 2026 it's not yet fixed
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --upgrade pip PyGObject==3.50.0
+
+        # Read the "Note" section in https://docs.weblate.org/en/weblate-4.11/admin/install/venv-debian.html#python-modules
     ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install --force-reinstall --no-binary :all: cffi
 
-	ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX=/usr/lib/x86_64-linux-gnu/ "$install_dir/venv/bin/pip" install Weblate=="$(ynh_app_upstream_version)"
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install psycopg2-binary ruamel.yaml aeidon phply boto3 google openai
+        ynh_hide_warnings ynh_exec_as_app BORG_OPENSSL_PREFIX="$borg_openssl_prefix/" "$install_dir/venv/bin/pip" install Weblate=="$(ynh_app_upstream_version)"
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install psycopg2-binary ruamel.yaml aeidon phply boto3 google openai
 
-	ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install django_sendmail_backend
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/pip" install django_sendmail_backend
 
     ynh_safe_rm "$install_dir/.cache/pip"
-popd
+popd || exit
 
 #=================================================
 # ADD A CONFIGURATION
@@ -114,7 +119,7 @@ ynh_config_add_systemd_socket
 # Set permissions to app files
 chmod 750 "$install_dir"
 chmod -R o-rwx "$install_dir"
-chown -R $app: "$install_dir"
+chown -R "$app:" "$install_dir"
 chown "$app:www-data" "$install_dir"
 chown -R "$app:www-data" "$install_dir/data"
 
@@ -124,26 +129,26 @@ chown -R "$app:www-data" "$install_dir/data"
 #==========================================
 ynh_script_progression "Filling up the database..."
 
-pushd $install_dir
-	# exec_as_app because it needs to be $app for postgresql
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate migrate --noinput
+pushd "$install_dir" || exit
+        # exec_as_app because it needs to be $app for postgresql
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" migrate --noinput
 
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate createadmin --no-color \
-		--password "$password" \
-		--username "$admin" \
-		--email "$admin_mail"
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" createadmin --no-color \
+                --password "$password" \
+                --username "$admin" \
+                --email "$admin_mail"
 
-	# generate static files
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate collectstatic --noinput
+        # generate static files
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" collectstatic --noinput
 
-	# https://docs.weblate.org/en/latest/admin/install/venv-debian.html
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate compress
+        # https://docs.weblate.org/en/latest/admin/install/venv-debian.html
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" compress
 
-	# Check the configuration
-	# This may fail in some cases with errors, etc., but the app works and the user can fix issues later.
-	ynh_hide_warnings ynh_exec_as_app $install_dir/venv/bin/weblate check --deploy || true
+        # Check the configuration
+        # This may fail in some cases with errors, etc., but the app works and the user can fix issues later.
+        ynh_hide_warnings ynh_exec_as_app "$install_dir/venv/bin/weblate" check --deploy || true
 
-popd
+popd || exit
 
 #chown again here to fix for multi-instance installs where said dir has not the correct permissions
 chmod -R 755 "$install_dir/data"
@@ -169,7 +174,7 @@ ynh_config_add_logrotate
 #=================================================
 ynh_script_progression "Integrating service in YunoHost..."
 
-yunohost service add $app --log="/var/log/$app/weblate.log"
+yunohost service add "$app" --log="/var/log/$app/weblate.log"
 yunohost service add "$app-celery" --log="/var/log/$app/weblate-celery-w1.log"
 
 #=================================================
@@ -177,8 +182,8 @@ yunohost service add "$app-celery" --log="/var/log/$app/weblate-celery-w1.log"
 #=================================================
 ynh_script_progression "Starting $app's systemd service..."
 
-ynh_systemctl --service=$app.socket --action="restart"
-ynh_systemctl --service=$app --action="start" --log_path="/var/log/$app/weblate.log" #--wait_until="spawned uWSGI"
+ynh_systemctl --service="$app.socket" --action="restart"
+ynh_systemctl --service="$app" --action="start" --log_path="/var/log/$app/weblate.log" #--wait_until="spawned uWSGI"
 ynh_systemctl --service="$app-celery" --action="start" --log_path="/var/log/$app/weblate-celery.log"
 
 #=================================================
